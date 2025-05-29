@@ -26,7 +26,7 @@ This repository contains an R script for a comprehensive analysis of psychologic
 The `Data_Preprocessing.csv` file is expected to contain:
 * Items for scales C, D, E, G (e.g., C1, C2, C3, etc.), used as outcome variables after pivoting.
 * Items for scales H, J, K (e.g., H1, H2, H3, H4, etc.), used for PCA.
-* Each row in the original wide-format data is assumed to represent an independent observation or participant.
+* Each row in the original wide-format data is assumed to represent an independent participant.
 
 ## Script Workflow
 
