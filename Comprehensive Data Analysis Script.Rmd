@@ -1,0 +1,249 @@
+---
+title: "Comprehensive Data Analysis Script"
+date: "2025-05-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Step 1: Setup - Install and Load Necessary Packages
+################################################################################
+
+required_packages <- c("tidyr", "dplyr", "ggplot2", "psych", 
+                       "interactions", "broom", "lavaan", "semTools")
+
+for (pkg in required_packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Step 2: Data Loading
+################################################################################
+
+tryCatch({
+  data <- read.csv("TEST1020.csv") 
+  print("Data loaded successfully.")
+  # print(head(data)) # Optional: print first few rows to check
+}, error = function(e) {
+  stop("Error loading data: TEST1020.csv not found. Please check the file path. Original error: ", e$message)
+})
+
+
+# Step 3: Psychometric Evaluation of Scales
+################################################################################
+
+## 3.1: KMO and Bartlett's Test
+# Kaiser-Meyer-Olkin (KMO) Measure of Sampling Adequacy and Bartlett's Test of Sphericity.
+# KMO > 0.6 is generally acceptable. Bartlett's test p-value should be significant (< 0.05).
+
+print("--- KMO and Bartlett's Test Results ---")
+scales_prefixes <- c("C", "D", "E", "G", "H", "J", "K")
+for (prefix in scales_prefixes) {
+  cat("\n--- Scale:", prefix, "---\n")
+  scale_data <- select(data, starts_with(prefix))
+  
+  # Ensure there are at least 2 variables for KMO and Bartlett's test
+  if (ncol(scale_data) > 1) {
+    kmo_result <- try(KMO(scale_data), silent = TRUE)
+    if (!inherits(kmo_result, "try-error")) {
+      print(paste("KMO for scale", prefix, ":"))
+      print(kmo_result)
+    } else {
+      print(paste("Could not compute KMO for scale", prefix, ". Error:", kmo_result))
+    }
+    
+    bartlett_result <- try(cortest.bartlett(scale_data), silent = TRUE)
+    if (!inherits(bartlett_result, "try-error")) {
+      print(paste("Bartlett's test for scale", prefix, ":"))
+      print(bartlett_result)
+    } else {
+      print(paste("Could not compute Bartlett's test for scale", prefix, ". Error:", bartlett_result))
+    }
+  } else {
+    print(paste("Scale", prefix, "has insufficient items (", ncol(scale_data), ") for KMO/Bartlett's test."))
+  }
+}
+
+## 3.2: Cronbach's Alpha for Internal Consistency
+# Cronbach's Alpha > 0.7 is generally considered acceptable.
+# Using check.keys=TRUE to potentially reverse score items if negatively correlated with total.
+
+print("\n--- Cronbach's Alpha Results ---")
+alpha_results <- list()
+for (prefix in scales_prefixes) {
+  cat("\n--- Scale:", prefix, "---\n")
+  scale_data <- select(data, starts_with(prefix))
+  if (ncol(scale_data) > 1) {
+    alpha_test <- try(alpha(scale_data, check.keys = TRUE), silent = TRUE)
+    if (!inherits(alpha_test, "try-error")) {
+      alpha_results[[prefix]] <- alpha_test$total$raw_alpha
+      print(paste("Cronbach's Alpha for scale", prefix, "(raw_alpha):", alpha_results[[prefix]]))
+      # print(alpha_test) # For detailed output
+    } else {
+      print(paste("Could not compute Cronbach's Alpha for scale", prefix, ". Error:", alpha_test))
+      alpha_results[[prefix]] <- NA
+    }
+  } else {
+    print(paste("Scale", prefix, "has insufficient items (", ncol(scale_data), ") for Cronbach's Alpha."))
+    alpha_results[[prefix]] <- NA
+  }
+}
+
+## 3.3: Confirmatory Factor Analysis (CFA)
+# Define the measurement model. Ensure item names (C1, C2, etc.) match your dataset.
+cfa_model_string <- '
+  Factor_C =~ C1 + C2 + C3
+  Factor_D =~ D1 + D2 + D3
+  Factor_E =~ E1 + E2 + E3
+  Factor_G =~ G1 + G2 + G3
+  Factor_H =~ H1 + H2 + H3 + H4
+  Factor_J =~ J1 + J2 + J3
+  Factor_K =~ K1 + K2 + K3 + K4
+'
+# Fit the CFA model
+# It's good practice to ensure data types are numeric for lavaan
+data_for_cfa <- data %>%
+  select(starts_with("C"), starts_with("D"), starts_with("E"), 
+         starts_with("G"), starts_with("H"), starts_with("J"), starts_with("K")) %>%
+  mutate(across(everything(), as.numeric)) # Ensure all selected columns are numeric
+
+cfa_fit <- try(cfa(cfa_model_string, data = data_for_cfa, std.lv = TRUE, auto.fix.first = FALSE, auto.var = TRUE), silent = TRUE)
+
+if (!inherits(cfa_fit, "try-error")) {
+  print("\n--- CFA Model Summary ---")
+  summary(cfa_fit, fit.measures = TRUE, standardized = TRUE)
+
+  ## 3.4: Composite Reliability (CR) and Average Variance Extracted (AVE)
+  # CR > 0.7 and AVE > 0.5 are generally considered good.
+  print("\n--- Composite Reliability (CR) and Average Variance Extracted (AVE) ---")
+  reliability_stats <- try(reliability(cfa_fit), silent = TRUE)
+  if (!inherits(reliability_stats, "try-error")) {
+    print(reliability_stats)
+  } else {
+    print("Could not compute CR and AVE using semTools::reliability. Error:")
+    print(reliability_stats)
+    # Manual calculation as a fallback or for specific factors if semTools::reliability fails generally
+    # Note: Manual calculation requires careful interpretation of standardized loadings (std.all)
+    # and error variances. The semTools::reliability function is preferred.
+  }
+} else {
+  print("\n--- CFA Model Fitting Failed ---")
+  print("CFA model could not be estimated. Check model specification, data, and error messages.")
+  print(cfa_fit)
+}
+
+
+# Step 4: Feature Engineering - Principal Component Analysis (PCA) for H, J, K scales
+################################################################################
+# Extract the first principal component scores for H, J, and K scales.
+# These scores will be used as variables in the regression model.
+
+data <- data %>%
+  mutate(
+    H_pca = principal(select(data, starts_with("H")), nfactors = 1, rotate = "none")$scores[, 1],
+    J_pca = principal(select(data, starts_with("J")), nfactors = 1, rotate = "none")$scores[, 1],
+    K_pca = principal(select(data, starts_with("K")), nfactors = 1, rotate = "none")$scores[, 1]
+  )
+print("\n--- PCA scores for H, J, K scales created ---")
+# print(head(select(data, H_pca, J_pca, K_pca))) # Optional: check PCA scores
+
+
+# Step 5: Data Preparation for Regression
+################################################################################
+
+# Transform data from wide to long format for regression
+# This matches columns like C1, C2, ... G1, G2, ...
+group_data_long <- data %>%
+  pivot_longer(
+    cols = matches("^[A-G][1-3]$"), # Matches columns like A1, B2, C3, etc., up to G3
+    names_to = "variable_item",    # e.g., C1, D2
+    values_to = "value"            # The actual score for that item
+  ) %>%
+  mutate(
+    group = substr(variable_item, 1, 1) # Extracts the first letter (C, D, E, G) as the group
+  )
+
+# Filter for the specified groups for the analysis
+# ************ IMPORTANT DECISION POINT *************
+# Based on "IP Data Final Version 1022 R Analysis.Rmd", using groups C, D, E, G.
+# If you decided to use groups A, B, C, change the filter to:
+# filter(group %in% c("C", "A", "B"))
+group_data_filtered <- group_data_long %>%
+  filter(group %in% c("C", "D", "E", "G")) %>% # Using C, D, E, G as per discussion
+  select(value, group, H_pca, J_pca, K_pca) 
+
+# Convert 'group' to a factor and set "C" as the reference group
+group_data_filtered$group <- factor(group_data_filtered$group)
+group_data_filtered$group <- relevel(group_data_filtered$group, ref = "C")
+
+print("\n--- Data prepared for regression ---")
+# print(head(group_data_filtered)) # Optional: check prepared data
+# print(table(group_data_filtered$group)) # Optional: check group distribution
+
+
+# Step 6: Regression Modeling and Interaction Analysis
+################################################################################
+# Building a linear model to predict 'value' using 'group' and its interactions
+# with H_pca, J_pca, and K_pca.
+
+# Build the linear regression model
+regression_model <- lm(value ~ group * H_pca + group * J_pca + group * K_pca, 
+                       data = group_data_filtered)
+
+# Display the regression model summary
+print("\n--- Regression Model Summary ---")
+summary(regression_model)
+
+## 6.1: Visualize Interaction Effects
+# Using interact_plot from the 'interactions' package.
+
+print("\n--- Generating Interaction Plots ---")
+
+# Interaction: H_pca and group
+plot_H_interaction <- interact_plot(regression_model, pred = H_pca, modx = group, 
+                                    plot.points = TRUE, interval = TRUE) + # Using a qualitative color palette
+  labs(title = "Interaction Effect: H_pca and Group",
+       x = "H_pca (Principal Component Score)",
+       y = "Predicted Value") +
+  theme_minimal()
+print(plot_H_interaction)
+ggsave("interaction_plot_H.png", plot = plot_H_interaction, width = 8, height = 6, dpi = 300)
+
+# Interaction: J_pca and group
+plot_J_interaction <- interact_plot(regression_model, pred = J_pca, modx = group, 
+                                    plot.points = TRUE, interval = TRUE) +
+  labs(title = "Interaction Effect: J_pca and Group",
+       x = "J_pca (Principal Component Score)",
+       y = "Predicted Value") +
+  theme_minimal()
+print(plot_J_interaction)
+ggsave("interaction_plot_J.png", plot = plot_J_interaction, width = 8, height = 6, dpi = 300)
+
+# Interaction: K_pca and group
+plot_K_interaction <- interact_plot(regression_model, pred = K_pca, modx = group, 
+                                    plot.points = TRUE, interval = TRUE) +
+  labs(title = "Interaction Effect: K_pca and Group",
+       x = "K_pca (Principal Component Score)",
+       y = "Predicted Value") +
+  theme_minimal()
+print(plot_K_interaction)
+ggsave("interaction_plot_K.png", plot = plot_K_interaction, width = 8, height = 6, dpi = 300)
+
+## 6.2: Table of Interaction Effects
+# Extracting interaction terms using 'broom::tidy'.
+
+interaction_effects_table <- broom::tidy(regression_model) %>%
+  filter(grepl(":", term)) # Filter for terms containing a colon, indicating an interaction
+
+print("\n--- Table of Interaction Effects ---")
+print(interaction_effects_table)
+
+
+# Step 7: Session Information
+################################################################################
+# Output R version and package versions for reproducibility.
+
+print("\n--- Session Information ---")
+sessionInfo()
+```
